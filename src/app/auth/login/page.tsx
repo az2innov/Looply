@@ -21,9 +21,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState('admin@looply.co.uk');
   const [password, setPassword] = useState('password123');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = login(email, password);
+    const result = await login(email, password);
     if (result.success) {
       router.push('/admin');
     }

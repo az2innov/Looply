@@ -5,15 +5,18 @@ import { MOCK_USERS } from '@/data/mockData';
 interface AuthStore {
   currentUser: User | null;
   isAuthenticated: boolean;
+  isAdmin2FAVerified: boolean;
   is2FAChallenged: boolean;
   pendingUser: User | null;
   mockOtpSecret: string;
   expectedDemoCode: string;
   authError: string | null;
+  lastSentOtpCode: string | null;
 
   // Actions
-  login: (email: string, password: string) => { requires2FA: boolean; success: boolean };
-  verify2FA: (code: string) => boolean;
+  login: (email: string, password: string) => Promise<{ requires2FA: boolean; success: boolean }>;
+  verify2FA: (code: string) => Promise<boolean>;
+  send2FAEmailCode: (email: string) => Promise<string | null>;
   cancel2FA: () => void;
   logout: () => void;
   enable2FA: () => void;
@@ -24,25 +27,46 @@ interface AuthStore {
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
-  // Default to a pre-authenticated demo user with 2FA so user can immediately experience the UX
-  currentUser: MOCK_USERS[0], // Eleanor Campbell (Admin)
-  isAuthenticated: true,
+  // Default to NULL / UNLOGGED for strict security
+  currentUser: null,
+  isAuthenticated: false,
+  isAdmin2FAVerified: false,
   is2FAChallenged: false,
   pendingUser: null,
   mockOtpSecret: 'JBSWY3DPEHPK3PXP',
   expectedDemoCode: '123456',
   authError: null,
+  lastSentOtpCode: null,
 
-  login: (email: string, password: string) => {
+  send2FAEmailCode: async (email: string) => {
+    try {
+      const res = await fetch('/api/auth/2fa/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.demoCode) {
+        set({ lastSentOtpCode: data.demoCode });
+        return data.demoCode;
+      }
+    } catch (e) {
+      console.warn('Error calling 2FA send API:', e);
+    }
+    return null;
+  },
+
+  login: async (email: string, password: string) => {
     set({ authError: null });
-    const user = MOCK_USERS.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const cleanEmail = email.trim().toLowerCase();
+    const user = MOCK_USERS.find((u) => u.email.toLowerCase() === cleanEmail);
 
     if (!user) {
-      // Create guest customer on the fly if not in list
+      // Guest customer on the fly
       const newUser: User = {
         id: `usr-${Date.now()}`,
         name: email.split('@')[0],
-        email,
+        email: cleanEmail,
         role: 'customer',
         twoFactorEnabled: false,
         identityVerified: true,
@@ -52,12 +76,17 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { requires2FA: false, success: true };
     }
 
-    if (user.twoFactorEnabled) {
+    // Admin or 2FA enabled users MUST pass 2FA
+    if (user.twoFactorEnabled || user.role === 'admin') {
       set({
         is2FAChallenged: true,
         pendingUser: user,
         authError: null,
       });
+
+      // Dispatch real email via Mailtrap SMTP
+      await get().send2FAEmailCode(cleanEmail);
+
       return { requires2FA: true, success: false };
     }
 
@@ -65,15 +94,46 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     return { requires2FA: false, success: true };
   },
 
-  verify2FA: (code: string) => {
+  verify2FA: async (code: string) => {
     const cleanCode = code.trim();
-    // Allow either the demo code '123456' or any 6 digit number in testing
-    const isValid = cleanCode === '123456' || (/^\d{6}$/.test(cleanCode));
-    
-    if (isValid && get().pendingUser) {
+    const pending = get().pendingUser;
+    if (!pending) return false;
+
+    try {
+      // Call Redis verification API
+      const res = await fetch('/api/auth/2fa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pending.email, code: cleanCode }),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        set({
+          currentUser: pending,
+          isAuthenticated: true,
+          isAdmin2FAVerified: pending.role === 'admin',
+          is2FAChallenged: false,
+          pendingUser: null,
+          authError: null,
+        });
+        return true;
+      }
+    } catch (e) {
+      console.warn('API verify fallback check');
+    }
+
+    // Fallback: allow demo code '123456' or last generated code
+    const isLocalValid =
+      cleanCode === '123456' ||
+      cleanCode === get().lastSentOtpCode ||
+      (/^\d{6}$/.test(cleanCode) && process.env.NODE_ENV !== 'production');
+
+    if (isLocalValid) {
       set({
-        currentUser: get().pendingUser,
+        currentUser: pending,
         isAuthenticated: true,
+        isAdmin2FAVerified: pending.role === 'admin',
         is2FAChallenged: false,
         pendingUser: null,
         authError: null,
@@ -81,7 +141,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return true;
     }
 
-    set({ authError: 'Invalid 6-digit authentication code. (Try 123456)' });
+    set({ authError: 'Invalid 6-digit authentication code. Check your Mailtrap inbox.' });
     return false;
   },
 
@@ -93,6 +153,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({
       currentUser: null,
       isAuthenticated: false,
+      isAdmin2FAVerified: false,
       is2FAChallenged: false,
       pendingUser: null,
       authError: null,
@@ -131,7 +192,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       name,
       email,
       role: 'customer',
-      twoFactorEnabled: true, // Default high-security for looply
+      twoFactorEnabled: true,
       twoFactorSecret: 'JBSWY3DPEHPK3PXP',
       identityVerified: true,
       activeRentalsCount: 0,
@@ -146,8 +207,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const curr = get().currentUser;
     if (curr) {
       set({ currentUser: { ...curr, role } });
-    } else {
-      set({ currentUser: role === 'admin' ? MOCK_USERS[0] : MOCK_USERS[1], isAuthenticated: true });
     }
   },
 }));

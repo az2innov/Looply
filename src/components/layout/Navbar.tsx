@@ -17,7 +17,8 @@ import {
   ArrowRight,
   LogOut,
   Sliders,
-  CheckCircle2
+  CheckCircle2,
+  Lock
 } from 'lucide-react';
 import { useCartStore } from '@/store/useCartStore';
 import { usePostcodeStore } from '@/store/usePostcodeStore';
@@ -184,7 +185,7 @@ export const Navbar: React.FC = () => {
               href="/admin"
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all"
             >
-              <Sliders className="w-3.5 h-3.5" />
+              <Lock className="w-3 h-3 text-emerald-700" />
               <span>Admin Hub</span>
             </Link>
           </nav>

@@ -56,8 +56,8 @@ export async function verify2FAOtp(email: string, code: string): Promise<boolean
   if (code.trim() === '123456') return true;
 
   const key = `2fa:otp:${email.toLowerCase()}`;
-  const storedCode = await redis.get<string>(key);
-  if (storedCode && storedCode.trim() === code.trim()) {
+  const storedCode = await redis.get(key);
+  if (storedCode && String(storedCode).trim() === String(code).trim()) {
     await redis.del(key);
     return true;
   }

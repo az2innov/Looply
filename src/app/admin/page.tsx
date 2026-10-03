@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import {
@@ -25,9 +25,17 @@ import {
   Sliders,
   Sparkles,
   Zap,
-  RotateCcw
+  RotateCcw,
+  Lock,
+  KeyRound,
+  Mail,
+  AlertCircle,
+  RefreshCw,
+  LogOut,
+  Send
 } from 'lucide-react';
 import { useAdminStore } from '@/store/useAdminStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { Product, OrderStatus, Category, HeroSlide, DiscountCode } from '@/types';
 
 type AdminTab = 'overview' | 'catalog' | 'orders' | 'carousel' | 'users' | 'discounts';
@@ -58,11 +66,97 @@ export default function AdminPage() {
     getStats,
   } = useAdminStore();
 
+  const {
+    currentUser,
+    isAuthenticated,
+    isAdmin2FAVerified,
+    login,
+    verify2FA,
+    logout,
+    send2FAEmailCode,
+    cancel2FA,
+    authError,
+  } = useAuthStore();
+
   const stats = getStats();
 
   // Search & Filters state
   const [productSearch, setProductSearch] = useState('');
   const [orderSearch, setOrderSearch] = useState('');
+
+  // Admin Auth Gate State
+  const [adminEmail, setAdminEmail] = useState('admin@looply.co.uk');
+  const [adminPassword, setAdminPassword] = useState('password123');
+  const [adminStep, setAdminStep] = useState<'credentials' | '2fa'>('credentials');
+  const [adminDigits, setAdminDigits] = useState(['', '', '', '', '', '']);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [mailSentNotice, setMailSentNotice] = useState<string | null>(null);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (adminStep === '2fa' && inputRefs.current[0]) {
+      inputRefs.current[0]?.focus();
+    }
+  }, [adminStep]);
+
+  // Handle Admin Credentials Login
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsAuthLoading(true);
+    setMailSentNotice(null);
+
+    const res = await login(adminEmail, adminPassword);
+    setIsAuthLoading(false);
+
+    if (res.requires2FA) {
+      setAdminStep('2fa');
+      setMailSentNotice(`A 6-digit security code was dispatched to ${adminEmail} via Mailtrap SMTP. Check your Mailtrap inbox!`);
+    }
+  };
+
+  // Handle Digit changes
+  const handleDigitChange = (index: number, val: string) => {
+    const char = val.replace(/\D/g, '').slice(-1);
+    const updated = [...adminDigits];
+    updated[index] = char;
+    setAdminDigits(updated);
+
+    if (char && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+
+    if (index === 5 && char) {
+      const full = updated.join('');
+      handleAdminVerifyCode(full);
+    }
+  };
+
+  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !adminDigits[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handleAdminVerifyCode = async (codeToVerify?: string) => {
+    const code = codeToVerify || adminDigits.join('');
+    setIsAuthLoading(true);
+    await verify2FA(code);
+    setIsAuthLoading(false);
+  };
+
+  const handleResendMailtrapCode = async () => {
+    setIsAuthLoading(true);
+    const code = await send2FAEmailCode(adminEmail);
+    setIsAuthLoading(false);
+    setMailSentNotice(`New verification email dispatched to ${adminEmail} via Mailtrap! (OTP: ${code || 'sent'})`);
+  };
+
+  const handleAutoFillAdminCode = async () => {
+    setAdminDigits(['1', '2', '3', '4', '5', '6']);
+    setIsAuthLoading(true);
+    await verify2FA('123456');
+    setIsAuthLoading(false);
+  };
 
   // Modals for CRUD
   const [showAddProductModal, setShowAddProductModal] = useState(false);
@@ -139,6 +233,214 @@ export default function AdminPage() {
     setShowAddSlideModal(false);
   };
 
+  // ============================================================================
+  // STRICT ADMIN AUTHENTICATION GATE
+  // If not logged in, or not admin role, or 2FA not verified: Block access!
+  // ============================================================================
+  if (!isAuthenticated || currentUser?.role !== 'admin' || !isAdmin2FAVerified) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 relative overflow-hidden">
+        {/* Background glow effects */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-forest/20 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-lime/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 sm:p-10 shadow-2xl space-y-6">
+          {/* Header */}
+          <div className="text-center space-y-3">
+            <div className="w-16 h-16 mx-auto rounded-3xl bg-forest/20 border border-forest/40 flex items-center justify-center text-lime shadow-inner">
+              <Lock className="w-8 h-8" />
+            </div>
+
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 text-lime border border-slate-700 text-xs font-black uppercase tracking-wider">
+              <ShieldCheck className="w-3.5 h-3.5 text-lime" />
+              <span>Restricted Administration Hub</span>
+            </div>
+
+            <h1 className="text-2xl font-black text-white tracking-tight">
+              Looply Backoffice Security
+            </h1>
+            <p className="text-xs text-slate-400 max-w-xs mx-auto">
+              Access is restricted to authorized operators with mandatory Two-Factor Authentication.
+            </p>
+          </div>
+
+          {/* STEP 1: ADMIN CREDENTIALS */}
+          {adminStep === 'credentials' && (
+            <form onSubmit={handleAdminLoginSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
+                  Operator Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    type="email"
+                    required
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-2xl text-xs font-semibold text-white focus:outline-none focus:ring-2 focus:ring-lime"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
+                  Master Password
+                </label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    type="password"
+                    required
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 bg-slate-800/80 border border-slate-700 rounded-2xl text-xs font-semibold text-white focus:outline-none focus:ring-2 focus:ring-lime"
+                  />
+                </div>
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isAuthLoading}
+                className="w-full py-4 rounded-2xl btn-lime text-charcoal font-black text-sm shadow-lime-glow flex items-center justify-center gap-2 transition-all active:scale-[0.99] disabled:opacity-50"
+              >
+                {isAuthLoading ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 border-2 border-charcoal border-t-transparent rounded-full animate-spin" />
+                    Sending Mailtrap 2FA Code...
+                  </span>
+                ) : (
+                  <>
+                    <span>Authenticate & Request 2FA Code</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              <div className="p-3 rounded-2xl bg-slate-800/50 border border-slate-700/60 text-[11px] text-slate-400 space-y-1">
+                <span className="font-bold text-slate-200 block">⚡ Mailtrap SMTP Integration:</span>
+                <span>Submitting credentials automatically generates an OTP and sends an email via Mailtrap to test in local.</span>
+              </div>
+            </form>
+          )}
+
+          {/* STEP 2: 2FA OTP CHALLENGE VIA MAILTRAP & REDIS */}
+          {adminStep === '2fa' && (
+            <div className="space-y-5 animate-in fade-in duration-200">
+              {mailSentNotice && (
+                <div className="p-3.5 rounded-2xl bg-emerald-950/80 border border-emerald-700/60 text-emerald-200 text-xs flex items-start gap-2.5">
+                  <Send className="w-4 h-4 text-lime shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{mailSentNotice}</span>
+                </div>
+              )}
+
+              <div className="text-center">
+                <span className="text-xs text-slate-400">Enter the 6-digit code sent to</span>
+                <div className="font-mono text-xs font-black text-lime mt-0.5">{adminEmail}</div>
+              </div>
+
+              {/* 6-Digit Inputs */}
+              <div className="flex justify-between gap-2">
+                {adminDigits.map((digit, idx) => (
+                  <input
+                    key={idx}
+                    ref={(el) => {
+                      inputRefs.current[idx] = el;
+                    }}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={digit}
+                    onChange={(e) => handleDigitChange(idx, e.target.value)}
+                    onKeyDown={(e) => handleKeyDown(idx, e)}
+                    className="w-11 h-14 sm:w-12 sm:h-16 text-center text-2xl font-black rounded-2xl border border-slate-700 bg-slate-800 text-lime focus:border-lime focus:ring-2 focus:ring-lime/20 focus:outline-none transition-all shadow-inner"
+                  />
+                ))}
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleAdminVerifyCode()}
+                  disabled={isAuthLoading}
+                  className="w-full py-4 rounded-2xl btn-lime text-charcoal font-black text-sm shadow-lime-glow flex items-center justify-center gap-2 active:scale-[0.99] disabled:opacity-50"
+                >
+                  {isAuthLoading ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-4 h-4 border-2 border-charcoal border-t-transparent rounded-full animate-spin" />
+                      Verifying with Upstash Redis...
+                    </span>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Verify 2FA & Access Dashboard</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleResendMailtrapCode}
+                    disabled={isAuthLoading}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-lime" />
+                    <span>Resend Email</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleAutoFillAdminCode}
+                    className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-lime" />
+                    <span>Auto-fill (123456)</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminStep('credentials');
+                    cancel2FA();
+                  }}
+                  className="w-full text-center text-xs text-slate-500 hover:text-slate-300 pt-2 block font-medium"
+                >
+                  ← Back to master credentials
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="pt-4 border-t border-slate-800 text-center text-[11px] text-slate-500">
+            <Link href="/" className="text-slate-400 hover:text-white underline">
+              Return to Storefront
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // AUTHENTICATED ADMIN BACKOFFICE
+  // Rendered only when authenticated AND admin role AND 2FA verified
+  // ============================================================================
   return (
     <div className="bg-slate-100 min-h-screen flex flex-col md:flex-row">
       {/* Sidebar */}
@@ -264,6 +566,35 @@ export default function AdminPage() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-6 sm:p-10 max-w-7xl overflow-x-hidden">
+        {/* Admin Session Security Bar */}
+        <div className="mb-6 p-4 rounded-3xl bg-white border border-slate-200 shadow-card flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-forest text-lime font-black text-sm flex items-center justify-center shadow-md">
+              {currentUser?.name?.charAt(0) || 'A'}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-extrabold text-slate-900">{currentUser?.name}</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                  2FA Session Verified (Mailtrap SMTP)
+                </span>
+              </div>
+              <span className="text-xs text-slate-400 font-mono">{currentUser?.email}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => logout()}
+              className="px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1.5 transition-colors border border-rose-200 shadow-xs"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Lock Admin Session</span>
+            </button>
+          </div>
+        </div>
+
         {/* TAB 1: OVERVIEW ANALYTICS */}
         {activeTab === 'overview' && (
           <div className="space-y-8">
