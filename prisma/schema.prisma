@@ -1,0 +1,139 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  DRIVER
+}
+
+enum OrderStatus {
+  PENDING
+  DISPATCHED
+  ACTIVE_LOAN
+  RETURN_SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String
+  phone            String?
+  role             Role      @default(CUSTOMER)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  identityVerified Boolean   @default(false)
+  postcode         String?
+  address          String?
+  orders           Order[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model Product {
+  id                 String      @id @default(cuid())
+  name               String
+  category           String
+  brand              String
+  tagline            String
+  description        String
+  specifications     String[]
+  image              String
+  gallery            String[]
+  baseRentalPrice28h Decimal     @db.Decimal(10, 2)
+  dailyRateAfter     Decimal     @db.Decimal(10, 2)
+  rrpBuying          Decimal     @db.Decimal(10, 2)
+  rating             Decimal     @default(5.0) @db.Decimal(3, 1)
+  reviewsCount       Int         @default(0)
+  inStock            Boolean     @default(true)
+  stockCount         Int         @default(5)
+  patTested          Boolean     @default(true)
+  popular            Boolean     @default(false)
+  featured           Boolean     @default(false)
+  bundleIncludes     String[]
+  tags               String[]
+  orderItems         OrderItem[]
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  orderNumber     String      @unique // e.g. LP-88412
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id])
+  customerName    String
+  email           String
+  phone           String
+  address         String
+  postcode        String
+  subtotal        Decimal     @db.Decimal(10, 2)
+  discount        Decimal     @default(0.00) @db.Decimal(10, 2)
+  totalAmount     Decimal     @db.Decimal(10, 2)
+  depositAmount   Decimal     @default(0.00) @db.Decimal(10, 2) // Always £0.00 in Looply
+  status          OrderStatus @default(PENDING)
+  deliveryDate    String
+  deliverySlot    String      // e.g. "10:00 - 12:00"
+  returnDate      String
+  collectionSlot  String      // e.g. "14:00 - 16:00"
+  driverAssigned  String?
+  paymentMethod   String      // "stripe", "apple_pay", "paypal"
+  stripePaymentId String?
+  items           OrderItem[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model OrderItem {
+  id           String   @id @default(cuid())
+  orderId      String
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id])
+  productName  String
+  productImage String
+  rentalDays   Int
+  startDate    String
+  endDate      String
+  itemTotal    Decimal  @db.Decimal(10, 2)
+}
+
+model DiscountCode {
+  id           String       @id @default(cuid())
+  code         String       @unique // e.g. "FIRST10"
+  discountType DiscountType @default(PERCENTAGE)
+  value        Decimal      @db.Decimal(10, 2)
+  minOrder     Decimal?     @db.Decimal(10, 2)
+  expiresAt    DateTime
+  active       Boolean      @default(true)
+  usageCount   Int          @default(0)
+  createdAt    DateTime     @default(now())
+}
+
+model HeroSlide {
+  id           String   @id @default(cuid())
+  badge        String
+  title        String
+  subtitle     String
+  ctaText      String
+  ctaLink      String
+  highlightTag String
+  bgGradient   String
+  image        String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
